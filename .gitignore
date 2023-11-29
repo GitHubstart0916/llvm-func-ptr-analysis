@@ -1,0 +1,7 @@
+/cmake-build-debug
+*.ll
+*.bc
+*.out
+/.idea
+/venv
+*.pdf
