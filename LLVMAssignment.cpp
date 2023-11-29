@@ -31,6 +31,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include "Liveness.h"
+#include <string.h>
 using namespace llvm;
 static ManagedStatic<LLVMContext> GlobalContext;
 static LLVMContext &getGlobalContext() { return *GlobalContext; }
@@ -66,6 +67,29 @@ struct FuncPtrPass : public ModulePass {
     std::map<BasicBlock*, std::set<BasicBlock*>*> *idm_map = new std::map<BasicBlock*, std::set<BasicBlock*>*>;
     std::map<BasicBlock*, std::set<BasicBlock*>*> *df_map = new std::map<BasicBlock*, std::set<BasicBlock*>*>;
 
+    //mem_analysis
+    std::map<Instruction*, Instruction*> ld2alloc;
+    std::set<BasicBlock*> def_bbs, use_bbs, F, W;
+    std::set<Instruction*> def_insts, use_insts;
+    //for bb in F,i.e. those basic block need to insert phi, bb_phis[bb] is the value set of mem_phi, like array ssa
+    std::map<Instruction*, std::map<BasicBlock*, std::set<Value*>*>*> bb_mem_phi_value;
+    std::map<Instruction*, Value*> reach_def; // maybe: function phi(bb) calledValue
+    std::stack<Value*> S;
+//    std::map<Instruction*, std::set<BasicBlock*>*> use_bbs;
+    //todo: maybe has bug -- need test
+    Instruction* n_alloc = nullptr;
+    Instruction* n_pos = nullptr;
+
+    void add_to_bb_mem_phi_value(Instruction* instr, BasicBlock* k, Value* v) {
+        if (bb_mem_phi_value.find(instr) == bb_mem_phi_value.end()) {
+            bb_mem_phi_value[instr] = new std::map<BasicBlock*, std::set<Value*>*>;
+        }
+        if (bb_mem_phi_value[instr]->find(k) == bb_mem_phi_value[instr]->end()) {
+            (*bb_mem_phi_value[instr])[k] = (new std::set<Value*>);
+        }
+        (*bb_mem_phi_value[instr])[k]->insert(v);
+    }
+
     void add_func(int index, std::map<int, std::set<Function*>*> *p_map, Function* func) {
         if ((*p_map)[index] == nullptr) {
             (*p_map)[index] = new std::set<Function*>;
@@ -76,7 +100,18 @@ struct FuncPtrPass : public ModulePass {
     void get_values(Value* v, std::set<Function*>* p_set, BasicBlock *bb, int index, std::map<int, std::set<Function*>*> *p_map, std::set<Value*>* know) {
         if (know->find(v) != know->end()) return;
         know->insert(v);
-        if (auto *phi = dyn_cast<PHINode>(v)) {
+        if (auto *alloc = dyn_cast<AllocaInst>(v)) {
+            n_alloc = alloc;
+            get_values(v, p_set, bb, index, p_map, know);
+        } else if (auto *b_v = dyn_cast<BasicBlock>(v)) {
+            for (Value* nxt: *(*bb_mem_phi_value[n_alloc])[b_v]) {
+                get_values(nxt, p_set, bb, index, p_map, know);
+            }
+        } else if (auto *ld = dyn_cast<LoadInst>(v)) {
+            n_alloc = ld2alloc[ld];
+//            if ()
+            get_values(reach_def[ld], p_set, bb, index, p_map, know);
+        } else if (auto *phi = dyn_cast<PHINode>(v)) {
 //            for (Use &use: phi->operands()) {
 //                errs() << use->getNumUses() << " ";
 //            }
@@ -311,12 +346,223 @@ struct FuncPtrPass : public ModulePass {
         }
     }
 
+    void print_reach_def() {
+        outs() << "reach def:\n";
+        for (auto it = reach_def.begin(); it != reach_def.end(); it++) {
+            outs() << *it->first << "in basic block ";
+            BasicBlock* bb = it->first->getParent();
+            bb->printAsOperand(outs(), false);
+            outs() << ":(" << bb->getParent()->getName() << "):";
+//            outs() << *it->second << "\n";
+            Value* v = it->second;
+            if (BasicBlock* b_v = dyn_cast<BasicBlock>(v)) {
+                v->printAsOperand(outs(), false);
+            } else {
+                outs() << *v;
+            }
+            outs() << "\n";
+        }
+        outs() << "=====================\n";
+    }
+
+    void print_bb_mem_phi_value() {
+        for (auto ie = bb_mem_phi_value.begin(); ie != bb_mem_phi_value.end(); ie++) {
+            outs() << "for instr: " <<  *ie->first << ":\n";
+            for (auto it = ie->second->begin(); it != ie->second->end(); it++) {
+                it->first->printAsOperand(outs(), false); outs() << " : ";
+                for (Value* v: *it->second) {
+                    if (v == nullptr) outs() << "null";
+                    else {
+                        if (BasicBlock* b_v = dyn_cast<BasicBlock>(v)) {
+                            v->printAsOperand(outs(), false);
+                        } else if (Function* f_v = dyn_cast<Function>(v)) {
+                            outs() << f_v->getName();
+                        } else {
+                            outs() << *v;
+                        }
+                    }
+                    outs() << " ";
+                }
+                outs() << "\n";
+            }
+        }
+
+    }
+
+    void mem_phi(Module &M) {
+        for (Function &function: M) {
+            for (BasicBlock &B: function) {
+                for (Instruction &inst: B) {
+                    bool run_tag = false;
+                    Instruction* alloc = nullptr;
+                    if (auto *call = dyn_cast<CallBase>(&inst)) {
+                        if (call->getCalledValue()->getName().size() == 6 &&
+                                call->getCalledValue()->getName() == "malloc") {
+//                            errs() << call->getCalledValue()->getName() << "\n";
+                            run_tag = true;
+                            alloc = call;
+                        }
+                    } else if (auto *loc = dyn_cast<AllocaInst>(&inst)) {
+                        run_tag = true;
+                        alloc = loc;
+                    }
+                    if (run_tag) {
+                        bb_mem_phi_value[alloc] = new std::map<BasicBlock*, std::set<Value*>*>;
+                        use_bbs.clear(), use_insts.clear(), def_bbs.clear(), def_insts.clear(), W.clear(), F.clear();
+                        mem_use_def_dfs(alloc);
+                        for (auto *v: use_insts) {
+                            ld2alloc[v] = alloc;
+                        }
+                        for (auto t: def_bbs) {
+                            W.insert(t);
+                        }
+                        while (!W.empty()) {
+                            BasicBlock* X = getRandFromHashSet(&W);
+                            W.erase(X);
+                            for (BasicBlock* Y: *(*df_map)[X]) {
+                                if (!(F.find(Y) != F.end())) {
+                                    F.insert(Y);
+                                    if (!(def_bbs.find(Y) != def_bbs.end())) {
+                                        W.insert(Y);
+                                    }
+                                }
+                            }
+                        }
+                        // F need insert phi
+                        outs() << "F has bb: ";
+                        for (BasicBlock* f_bb: F) {
+                            f_bb->printAsOperand(outs(), false); outs() << " ";
+                        }
+                        outs() << "\n";
+                        while (!S.empty()) S.pop();
+                        rename_dfs(alloc, &function.getEntryBlock());
+                        // todo: extend basic block value to common value
+                        for (auto* v_set: ValueSet(bb_mem_phi_value)) {
+                            v_set->erase(nullptr);
+                        }
+                        print_bb_mem_phi_value();
+                        // tag
+                        bool tag = true;
+                        while (tag) {
+                            tag = false;
+                            for (auto* v_set: ValueSet(*bb_mem_phi_value[alloc])) {
+                                std::vector<BasicBlock*> bbs_to_ext;
+                                for (auto* v: *v_set) {
+                                    if (!v) continue;
+                                    if (auto* b_v = dyn_cast<BasicBlock>(v)) {
+                                        tag = true; bbs_to_ext.push_back(b_v);
+                                    }
+                                }
+                                for (BasicBlock* bb_to_ext: bbs_to_ext) {
+                                    for (Value* v_to_add: *(*bb_mem_phi_value[alloc])[bb_to_ext]) {
+                                        v_set->insert(v_to_add);
+                                    }
+                                    v_set->erase(bb_to_ext);
+                                }
+                            }
+                        }
+                        print_bb_mem_phi_value();
+                    }
+                }
+            }
+        }
+    }
+
+    template<typename T, typename _T>
+    std::vector<T> KeySet(std::map<T, _T> test)
+    {
+        std::vector<T> keys;
+        for(auto it = test.begin(); it != test.end(); ++it){
+            keys.push_back(it->first);
+        }
+        return keys;
+    }
+
+    template<typename T, typename _T>
+    std::vector<_T> ValueSet(std::map<T, _T> test)
+    {
+        std::vector<_T> keys;
+        for(auto it = test.begin(); it != test.end(); ++it){
+            keys.push_back(it->second);
+        }
+        return keys;
+    }
+
+    BasicBlock* getRandFromHashSet(std::set<BasicBlock*>* hashSet) {
+        for (BasicBlock* bb: (*hashSet)) {
+            return bb;
+        }
+        return nullptr;
+    }
+
+    void rename_dfs(Instruction* alloc, BasicBlock* X) {
+        int cnt = 0;
+        if (F.find(X) != F.end()) { // X has mem phi
+            S.push(X);
+        }
+        for (Instruction* A = X->getFirstNonPHIOrDbg(); A; A = A->getNextNonDebugInstruction()) {
+            if (use_insts.find(A) != use_insts.end()) {
+                reach_def[A] = get_stack_top_v();
+            }
+            if (def_insts.find(A) != def_insts.end()) {
+                if (auto* st = dyn_cast<StoreInst>(A)) {
+                    S.push(st->getValueOperand());
+                } else {
+                    //todo: this branch maybe unreachable
+                }
+                cnt++;
+            }
+        }
+        for (BasicBlock* bb: successors(X)) {
+            if (F.find(bb) != F.end()) {
+                add_to_bb_mem_phi_value(alloc, bb, get_stack_top_v());
+            }
+        }
+        for (BasicBlock* next: *(*idm_map)[X]) {
+            rename_dfs(alloc, next);
+        }
+        for (int i = 0; i < cnt; i++) S.pop();
+    }
+
+    Value* get_stack_top_v() {
+        if (S.empty()) {
+            return nullptr;
+        }
+        return S.top();
+    }
+
+    // no-element-analysis
+    void mem_use_def_dfs(Instruction *inst) {
+        for (User *user: inst->users()) {
+//            outs() << *user << "\n";
+            if (auto* gep = dyn_cast<GetElementPtrInst>(user)) {
+                mem_use_def_dfs(gep);
+            } else if (auto* ld = dyn_cast<LoadInst>(user)) {
+                use_bbs.insert(ld->getParent());
+                use_insts.insert(ld);
+                //todo:: dangerous method
+                mem_use_def_dfs(ld);
+            } else if (auto* st = dyn_cast<StoreInst>(user)) {
+                def_bbs.insert(st->getParent());
+                def_insts.insert(st);
+            } else if (auto* cast = dyn_cast<BitCastInst>(user)) {
+                mem_use_def_dfs(cast);
+            }
+
+        }
+    }
+
+//    //alloca-instr's reach def at pos
+//    std::set<Value*>* get_reach_defs(Instruction* alloc, Instruction* pos) {
+//
+//    }
+
     bool runOnModule(Module &M) override {
 //        errs() << "Hello: ";
 //        errs().write_escaped(M.getName()) << '\n';
-//        for (Function &F: M) {
-//            errs() << F << "\n";
-//        }
+        for (Function &F: M) {
+            outs() << F << "\n";
+        }
         init(M);
         make_dom(M);
         print_map(dm_map);
@@ -324,6 +570,8 @@ struct FuncPtrPass : public ModulePass {
         print_map(idm_map);
         make_df(M);
         print_map(df_map);
+        mem_phi(M);
+        print_reach_def();
         for (Function &F: M) {
 //            errs() << F.getName();
 //            errs() << " use empty: " << F.users().empty() << "\n";
@@ -337,6 +585,11 @@ struct FuncPtrPass : public ModulePass {
 //                    }
 //                    I->print(errs(), false); errs() << '\n';
                     if (auto *call = dyn_cast<CallBase>(I)) {
+                        Value* v = call->getCalledValue();
+                        if (v->getName().size() >= 4 && v->getName()[0] == 'l' && v->getName()[1] == 'l'
+                            && v->getName()[2] == 'v' && v->getName()[3] == 'm') {
+                            continue;
+                        }
 //                        values.clear();
                         funcs->clear();
                         func_maps->clear();
