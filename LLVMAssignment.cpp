@@ -60,6 +60,12 @@ struct FuncPtrPass : public ModulePass {
     std::map<int, std::set<Function*>*> *func_maps = new std::map<int, std::set<Function*>*>;
     std::set<Value*> *c_know = new std::set<Value*>;
 
+    //CFG
+    std::map<Function*, std::set<BasicBlock*>*> *bbs_map = new std::map<Function*, std::set<BasicBlock*>*>;
+    std::map<BasicBlock*, std::set<BasicBlock*>*> *dm_map = new std::map<BasicBlock*, std::set<BasicBlock*>*>;
+    std::map<BasicBlock*, std::set<BasicBlock*>*> *idm_map = new std::map<BasicBlock*, std::set<BasicBlock*>*>;
+    std::map<BasicBlock*, std::set<BasicBlock*>*> *df_map = new std::map<BasicBlock*, std::set<BasicBlock*>*>;
+
     void add_func(int index, std::map<int, std::set<Function*>*> *p_map, Function* func) {
         if ((*p_map)[index] == nullptr) {
             (*p_map)[index] = new std::set<Function*>;
@@ -184,18 +190,140 @@ struct FuncPtrPass : public ModulePass {
         }
     }
 
+    void init(Module &M) {
+        for (Function &F: M) {
+            (*bbs_map)[&F] = new std::set<BasicBlock*>;
+            for (BasicBlock &bb: F) {
+                (*bbs_map)[&F]->insert(&bb);
+                (*dm_map)[&bb] = new std::set<BasicBlock*>;
+                (*df_map)[&bb] = new std::set<BasicBlock*>;
+                (*idm_map)[&bb] = new std::set<BasicBlock*>;
+            }
+        }
+    }
+
+    void make_dom(Module &M) {
+        for (Function &F: M) {
+            BasicBlock* enter = &(*F.getBasicBlockList().begin());
+            std::set<BasicBlock*>* BBs = (*bbs_map)[&F];
+            outs() << F.getName() << ": " << BBs->size() << "\n";
+            for (BasicBlock* bb: *BBs) {
+                bb->printAsOperand(outs(), false); outs() << " ";
+                std::set<BasicBlock*>* doms = new std::set<BasicBlock*>();
+                std::set<BasicBlock*>* know = new std::set<BasicBlock*>();
+                dfs(enter, bb, know);
+                for (BasicBlock* temp: *BBs) {
+                    if (!(know->find(temp) != know->end())) {
+                        doms->insert(temp);
+                    }
+                }
+                (*dm_map)[bb] = doms;
+            }
+            outs() << "\n";
+        }
+    }
+
+    void dfs(BasicBlock *bb, BasicBlock *no, std::set<BasicBlock *>* know) {
+        if ((bb == no)) {
+            return;
+        }
+        if ((know->find(bb) != know->end())) {
+            return;
+        }
+        know->insert(bb);
+        for (BasicBlock* next: successors(bb)) {
+            if (know->find(next) == know->end() && (next != no)) {
+                dfs(next, no, know);
+            }
+        }
+    }
+
+    void make_idm(Module &M) {
+        for (Function &F: M) {
+            std::set<BasicBlock*>* BBs = (*bbs_map)[&F];
+            for (BasicBlock* A: *BBs) {
+                std::set<BasicBlock*>* idoms = new std::set<BasicBlock*>();
+                for (BasicBlock* B: *((*dm_map)[A])) {
+                    if (AIDomB(A, B)) {
+                        idoms->insert(B);
+                    }
+                }
+                (*idm_map)[A] = (idoms);
+            }
+        }
+    }
+
+    bool AIDomB(BasicBlock *A, BasicBlock *B) {
+        std::set<BasicBlock*>* ADoms = (*dm_map)[A];
+        if (!(ADoms->find(B) != ADoms->end())) {
+            return false;
+        }
+        if ((A == B)) {
+            return false;
+        }
+        for (BasicBlock* temp: *ADoms) {
+            if (!(temp == A) && !(temp == B)) {
+                if ((*dm_map)[temp]->find(B) != (*dm_map)[temp]->end()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    void make_df(Module &M) {
+        for (Function &F: M) {
+            for (BasicBlock* X: *(*bbs_map)[&F]) {
+                std::set<BasicBlock*>* DF = new std::set<BasicBlock*>();
+                for (BasicBlock* Y: *(*bbs_map)[&F]) {
+                    if (DFXHasY(X, Y)) {
+                        DF->insert(Y);
+                    }
+                }
+                (*df_map)[X] = (DF);
+            }
+        }
+
+    }
+
+    bool DFXHasY(BasicBlock *X, BasicBlock *Y) {
+        for (BasicBlock* P: predecessors(Y)) {
+            if (((*dm_map)[X]->find(P) != (*dm_map)[X]->end()) &&
+                ((X == Y) || !((*dm_map)[X]->find(Y) != (*dm_map)[X]->end()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void print_map(std::map<BasicBlock*, std::set<BasicBlock*>*> *prt) {
+        if (prt == dm_map) outs() << "print bb doms:\n";
+        if (prt == idm_map) outs() << "print bb idoms:\n";
+        if (prt == df_map) outs() << "print bb DF:\n";
+
+        for (auto it = prt->begin(); it != prt->end(); it++) {
+            BasicBlock* bb = it->first;
+            bb->printAsOperand(outs(), false); outs() << ":(" << bb->getParent()->getName() << "):";
+            for (BasicBlock *d_bb: *(it->second)) {
+                d_bb->printAsOperand(outs(), false); outs() << " ";
+            }
+            outs() << "\n";
+        }
+    }
 
     bool runOnModule(Module &M) override {
 //        errs() << "Hello: ";
 //        errs().write_escaped(M.getName()) << '\n';
-        for (Function &F: M) {
-            errs() << F << "\n";
-//            for (BasicBlock &B: F) {
-//                for (Instruction &I: B) {
-//                    errs() << I << "\n";
-//                }
-//            }
-        }
+//        for (Function &F: M) {
+//            errs() << F << "\n";
+//        }
+        init(M);
+        make_dom(M);
+        print_map(dm_map);
+        make_idm(M);
+        print_map(idm_map);
+        make_df(M);
+        print_map(df_map);
         for (Function &F: M) {
 //            errs() << F.getName();
 //            errs() << " use empty: " << F.users().empty() << "\n";
