@@ -61,6 +61,7 @@ struct FuncPtrPass : public ModulePass {
 
     std::map<int, std::set<Function*>*> *func_maps = new std::map<int, std::set<Function*>*>;
     std::set<Value*> *c_know = new std::set<Value*>;
+    std::set<Instruction*> *alias_inst = new std::set<Instruction*>;
 
     //CFG
     std::map<Function*, std::set<BasicBlock*>*> *bbs_map = new std::map<Function*, std::set<BasicBlock*>*>;
@@ -72,7 +73,10 @@ struct FuncPtrPass : public ModulePass {
     std::map<Value*, std::set<Instruction*>*> *def_insts_map = new std::map<Value*, std::set<Instruction*>*>;
     std::map<Value*, std::set<Instruction*>*> *use_insts_map = new std::map<Value*, std::set<Instruction*>*>;
 //    std::map<Instruction*, std::set<BasicBlock*>*> *w_map = new std::map<Instruction*, std::set<BasicBlock*>*>;
+    std::map<Value*, std::map<Value*, int>*> *def_pos_map = new std::map<Value*, std::map<Value*, int>*>; // only for func
+    std::map<Value*, int>* def_pos;
 
+//
 
     std::set<std::set<Value*>*> alias_ptr;
     //mem_analysis
@@ -135,13 +139,18 @@ struct FuncPtrPass : public ModulePass {
         if (know->find(v) != know->end()) return;
         know->insert(v);
         if (v == nullptr) return;
-        if (auto *gep = dyn_cast<GetElementPtrInst>(v)) {
+        if (auto *cast = dyn_cast<BitCastInst>(v)) {
+            n_alloc = cast->getOperand(0);
+            outs() << *n_alloc << " " << *n_pos << "\n";
+            Value* v = get_reach_def(n_alloc, n_pos);
+            get_values(v, p_set, bb, index, p_map, know);
+        } else if (auto *gep = dyn_cast<GetElementPtrInst>(v)) {
             Value* p_base = gep->getPointerOperand();
             get_values(p_base, p_set, bb, index, p_map, know);
         } else if (auto *alloc = dyn_cast<AllocaInst>(v)) {
             n_alloc = alloc;
             Value* v = get_reach_def(n_alloc, n_pos);
-//            outs() << *n_alloc << " reach pos: " << *n_pos << " value is: " << *v << "\n";
+            outs() << *n_alloc << " reach pos: " << *n_pos << " value is: " << *v << "\n";
             get_values(v, p_set, bb, index, p_map, know);
         } else if (auto *b_v = dyn_cast<BasicBlock>(v)) {
             for (Value* nxt: *(*bb_mem_phi_value[n_alloc])[b_v]) {
@@ -155,6 +164,21 @@ struct FuncPtrPass : public ModulePass {
                     Value* p_base = gep->getPointerOperand();
 //                    outs() << *p_base << "\n";
                     get_values(p_base, p_set, bb, index, p_map, know);
+                }
+            } else if (auto *para = dyn_cast<Argument>(n_alloc)) {
+
+                Value* v = get_param_reach_def(n_alloc, ld);
+                outs() << "n alloc is param, and reach v is ";
+                if (v == nullptr) outs() << "null\n";
+                else outs() << *v << "\n";
+
+                if (v == nullptr)   get_values(n_alloc, p_set, bb, index, p_map, know);
+                else {
+                    while (is_alloc_or_malloc(v)) {
+                        v = (Instruction*) get_reach_def((Instruction*) v, ld);
+//                outs() << *v << "\n";
+                    }
+                    get_values(v, p_set, bb, index, p_map, know);
                 }
             } else {
                 Value* v = get_reach_def(n_alloc, ld);
@@ -200,7 +224,18 @@ struct FuncPtrPass : public ModulePass {
 //                call->print(errs(), false); errs() << "\n";
 //                errs() << *call->getOperandUse(pos).get() << "\n";
                 n_pos = call;
-                get_values(call->getOperandUse(pos).get(), p_set, bb, 0, p_map, know);
+                if (auto *para = dyn_cast<Argument>(call->getOperandUse(pos).get())) {
+                    Value *v = get_reach_def(call->getOperandUse(pos).get(), n_pos);
+                    if (v == nullptr) {
+                        get_values(call->getOperandUse(pos).get(), p_set, bb, 0, p_map, know);
+                    } else {
+                        get_values(v, p_set, bb, 0, p_map, know);
+                    }
+                } else {
+                    get_values(call->getOperandUse(pos).get(), p_set, bb, 0, p_map, know);
+                }
+
+
             }
         } else if (auto *call = dyn_cast<CallBase>(v)) {
             auto* t = new std::set<Function*>;
@@ -471,13 +506,14 @@ struct FuncPtrPass : public ModulePass {
     void mem_phi(Module &M) {
         // todo: calc func params:
         for (Function &function: M) {
-            for (Value &v: function.args()) {
-                Value *alloc = &v;
+            for (Value &vv: function.args()) {
+                Value *alloc = &vv;
                 bb_mem_phi_value[alloc] = new std::map<BasicBlock*, std::set<Value*>*>;
                 reach_def[alloc] = new std::map<Instruction*, Value*>;
                 use_bbs.clear(), def_bbs.clear();
                 use_insts = new std::set<Instruction*>;
                 def_insts = new std::set<Instruction*>;
+                def_pos = new std::map<Value*, int>;
                 W = new std::set<BasicBlock*>, F = new std::set<BasicBlock*>;
                 mem_use_def_dfs(alloc);
                 W = new std::set<BasicBlock*>, F = new std::set<BasicBlock*>;
@@ -506,6 +542,7 @@ struct FuncPtrPass : public ModulePass {
                 (*w_map)[alloc] = W;
                 (*def_insts_map)[alloc] = def_insts;
                 (*use_insts_map)[alloc] = use_insts;
+                (*def_pos_map)[alloc] = def_pos;
                 outs() << "F has bb: ";
                 for (BasicBlock* f_bb: *F) {
                     f_bb->printAsOperand(outs(), false); outs() << " ";
@@ -541,6 +578,7 @@ struct FuncPtrPass : public ModulePass {
             }
         }
 
+        //calc alias
         for (Function &function: M) {
             for (BasicBlock &bb: function) {
                 for (Instruction &inst: bb) {
@@ -551,6 +589,7 @@ struct FuncPtrPass : public ModulePass {
                             A = get_mem_pos(A);
                             B = get_mem_pos(B);
                             add_to_alias(A, B);
+                            alias_inst->insert(st); // todo: check
                         }
                     }
                 }
@@ -564,6 +603,7 @@ struct FuncPtrPass : public ModulePass {
             outs() << "\n";
         }
 
+        //pre calc def-use
         for (Function &function: M) {
             for (BasicBlock &B: function) {
                 for (Instruction &inst: B) {
@@ -586,10 +626,12 @@ struct FuncPtrPass : public ModulePass {
                         use_bbs.clear(), def_bbs.clear();
                         use_insts = new std::set<Instruction*>;
                         def_insts = new std::set<Instruction*>;
+                        def_pos = new std::map<Value*, int>;
                         W = new std::set<BasicBlock*>, F = new std::set<BasicBlock*>;
                         mem_use_def_dfs(alloc);
                         (*def_insts_map)[alloc] = def_insts;
                         (*use_insts_map)[alloc] = use_insts;
+                        (*def_pos_map)[alloc] = def_pos;
                     }
                 }
             }
@@ -638,6 +680,7 @@ struct FuncPtrPass : public ModulePass {
                         use_bbs.clear(), def_bbs.clear();
                         use_insts = (*use_insts_map)[alloc];
                         def_insts = (*def_insts_map)[alloc];
+                        def_pos = (*def_pos_map)[alloc];
                         W = new std::set<BasicBlock*>, F = new std::set<BasicBlock*>;
 //                        mem_use_def_dfs(alloc);
                         for (auto *v: *use_insts) {
@@ -671,7 +714,7 @@ struct FuncPtrPass : public ModulePass {
                         for (BasicBlock* f_bb: *F) {
                             f_bb->printAsOperand(outs(), false); outs() << " ";
                         }
-                        outs() << "\n";
+                        outs() <<  S.size() << "\n";
                         while (!S.empty()) S.pop();
                         rename_dfs(alloc, &function.getEntryBlock());
                         // todo: extend basic block value to common value
@@ -737,14 +780,30 @@ struct FuncPtrPass : public ModulePass {
         reach_v = nullptr;
         F = (*f_map)[alloc], W = (*w_map)[alloc];
         def_insts = (*def_insts_map)[alloc];
-//        outs() << *alloc << " defs: \n";
-//        for (Instruction* def_inst: *def_insts) {
-//            outs() << *def_inst << "\n";
-//        }
-//        outs() << "==========================\n";
+        def_pos = (*def_pos_map)[alloc];
+        if (def_insts == nullptr || def_insts->empty()) return nullptr;
+        for (auto *v: *alias_inst) {
+            if (def_insts->find(v) != def_insts->end()) def_insts->erase(v);
+        }
+        outs() << *alloc << " defs: \n";
+        for (Instruction* def_inst: *def_insts) {
+            outs() << *def_inst << "\n";
+        }
+        outs() << "==========================\n";
+        outs() << "F has bb: \n";
+        for (BasicBlock* bb: *F) {
+            bb->printAsOperand(outs(), false), outs() << " ";
+        }
+        outs() << "==========================\n";
         while (!S.empty()) S.pop();
         get_reach_v_dfs(alloc, pos, &pos->getParent()->getParent()->getEntryBlock());
-//        outs() << *alloc << " at " << *pos << " is " << *reach_v << "\n";
+//        if (auto *bb = dyn_cast<BasicBlock>(reach_v)) {
+//            outs() << *alloc << " at " << *pos << " is "; bb->printAsOperand(outs(), false); outs() << "\n";
+//            for (Value *def: *(*bb_mem_phi_value[alloc])[bb]) {
+//                outs() << *def << "\n";
+//            }
+//        }
+
         return reach_v;
     }
 
@@ -766,32 +825,31 @@ struct FuncPtrPass : public ModulePass {
 //                    outs() << *st->getValueOperand() << "\n";
 //                    outs() << *st->getOperandUse(0).get() << "\n";
                     S.push(st->getValueOperand());
+                    cnt++;
 //                    outs() << "S size is " << S.size() << "\n";
-                } else {
-                    //todo: this branch maybe unreachable
-                }
-                cnt++;
-            } else if (auto* func_call = dyn_cast<CallBase>(A)) {
-
-                int idx = -1;
-                for (int i = 0; i < func_call->getNumArgOperands(); i++) {
+                } else if (auto* func_call = dyn_cast<CallBase>(A)) {
+                    int idx = -1;
+                    for (int i = 0; i < func_call->getNumArgOperands(); i++) {
 //                    log(func_call->getOperand(i));
-                    if (func_call->getOperand(i) == alloc) {
-                        idx = i;
+                        if (func_call->getOperand(i) == alloc) {
+                            idx = i;
+                        }
                     }
-                }
 //                log(idx);
 //                to_log = false;
-                if (idx != -1) {
-                    outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
-                    Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
-                                                           func_call->getCalledFunction()->getEntryBlock().getTerminator());
-                    if (param_reach_def != nullptr) {
-                        outs() << *param_reach_def << "\n";
-                        S.push(param_reach_def);
-                        cnt++;
+                    if (idx == -1) idx = (*p_def_pos)[func_call];
+                    if (idx != -1) {
+                        outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
+                        Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
+                                                                     func_call->getCalledFunction()->getEntryBlock().getTerminator());
+                        if (param_reach_def != nullptr) {
+                            outs() << *param_reach_def << "\n";
+                            S.push(param_reach_def);
+                            cnt++;
+                        }
                     }
                 }
+            } else if (auto* func_call = dyn_cast<CallBase>(A)) {
 
             }
         }
@@ -814,12 +872,14 @@ struct FuncPtrPass : public ModulePass {
     Value* reach_p;
     std::set<BasicBlock*> *p_f, *p_w;
     std::set<Instruction*> *p_def_insts;
+    std::map<Value*, int> *p_def_pos;
 
     Value* get_param_reach_def(Value* alloc, Instruction* pos) {
         reach_p = nullptr;
         p_f = (*f_map)[alloc], p_w = (*w_map)[alloc];
+        p_def_pos = (*def_pos_map)[alloc];
         p_def_insts = (*def_insts_map)[alloc];
-        if (p_def_insts == nullptr || p_def_insts->size() == 0) return nullptr;
+        if (p_def_insts == nullptr || p_def_insts->empty()) return nullptr;
         while (!param_S.empty()) param_S.pop();
         get_reach_p_dfs(alloc, pos, &pos->getParent()->getParent()->getEntryBlock());
         return reach_p;
@@ -840,10 +900,51 @@ struct FuncPtrPass : public ModulePass {
             if (p_def_insts->find(A) != p_def_insts->end()) {
                 if (auto* st = dyn_cast<StoreInst>(A)) {
                     param_S.push(st->getValueOperand());
-                } else {
-                    //todo: this branch maybe unreachable
+                    cnt++;
+                } else if (auto* func_call = dyn_cast<CallBase>(A)) {
+                    int idx = -1;
+                    for (int i = 0; i < func_call->getNumArgOperands(); i++) {
+//                    log(func_call->getOperand(i));
+                        if (func_call->getOperand(i) == alloc) {
+                            idx = i;
+                        }
+                    }
+//                log(idx);
+//                to_log = false;
+                    if (idx == -1) idx = (*p_def_pos)[func_call];
+                    if (idx != -1) {
+                        outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
+                        std::stack<Value*> tmp, tmp2;
+                        Value* t_reach_p;
+                        t_reach_p = reach_p;
+                        while (!param_S.empty()) {
+                            tmp.push(param_S.top());
+                            param_S.pop();
+                        }
+                        while (!tmp.empty()) {
+                            tmp2.push(tmp.top());
+                            tmp.pop();
+                        }
+                        Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
+                                                                     func_call->getCalledFunction()->getEntryBlock().getTerminator());
+                        while (!tmp2.empty()) {
+                            tmp.push(tmp2.top());
+                            tmp2.pop();
+                        }
+
+                        while (!tmp.empty()) {
+                            param_S.push(tmp.top());
+                            tmp.pop();
+                        }
+                        reach_p = t_reach_p;
+
+                        if (param_reach_def != nullptr) {
+                            outs() << *param_reach_def << "\n";
+                            param_S.push(param_reach_def);
+                            cnt++;
+                        }
+                    }
                 }
-                cnt++;
             }
         }
 
@@ -878,10 +979,33 @@ struct FuncPtrPass : public ModulePass {
             if (def_insts->find(A) != def_insts->end()) {
                 if (auto* st = dyn_cast<StoreInst>(A)) {
                     S.push(st->getValueOperand());
+                    cnt++;
+                } else if (auto *func_call = dyn_cast<CallBase>(A)) {
+//                    S.push(call);
+                    int idx = -1;
+                    for (int i = 0; i < func_call->getNumArgOperands(); i++) {
+//                    log(func_call->getOperand(i));
+                        if (func_call->getOperand(i) == alloc) {
+                            idx = i;
+                        }
+                    }
+//                log(idx);
+//                to_log = false;
+                    if (idx == -1) idx = 0;
+                    if (idx != -1) {
+                        outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
+                        Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
+                                                                     func_call->getCalledFunction()->getEntryBlock().getTerminator());
+                        if (param_reach_def != nullptr) {
+                            outs() << *param_reach_def << "\n";
+                            S.push(param_reach_def);
+                            cnt++;
+                        }
+                    }
                 } else {
                     //todo: this branch maybe unreachable
+                    assert("error");
                 }
-                cnt++;
             }
         }
         for (BasicBlock* bb: successors(X)) {
@@ -913,7 +1037,9 @@ struct FuncPtrPass : public ModulePass {
     void mem_use_def_dfs(Value *inst) {
         for (User *user: inst->users()) {
 //            outs() << *user << "\n";
-            if (auto* gep = dyn_cast<GetElementPtrInst>(user)) {
+            if (auto *phi = dyn_cast<PHINode>(user)) {
+                mem_use_def_dfs(phi);
+            } else if (auto* gep = dyn_cast<GetElementPtrInst>(user)) {
                 mem_use_def_dfs(gep);
             } else if (auto* ld = dyn_cast<LoadInst>(user)) {
                 use_bbs.insert(ld->getParent());
@@ -944,6 +1070,9 @@ struct FuncPtrPass : public ModulePass {
                                                    call->getCalledFunction()->getEntryBlock().getTerminator());
                     if (v != nullptr) {
                         outs() << *call << " def " << *inst << "\n";
+                        def_bbs.insert(call->getParent());
+                        def_insts->insert(call);
+                        (*def_pos)[call] = idx;
                     }
                 }
             }
