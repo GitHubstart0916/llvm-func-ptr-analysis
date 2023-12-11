@@ -67,6 +67,6 @@ def check_answer(st=0, ed=20):
 
 
 if __name__ == '__main__':
-    log = check_answer(0, 30)
+    log = check_answer(0, 35)
     for key in log.keys():
         print("{}: {}, {}".format(key, log[key][0], log[key][1]))

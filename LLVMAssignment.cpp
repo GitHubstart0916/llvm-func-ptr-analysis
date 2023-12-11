@@ -142,7 +142,16 @@ struct FuncPtrPass : public ModulePass {
         if (auto *cast = dyn_cast<BitCastInst>(v)) {
             n_alloc = cast->getOperand(0);
             outs() << *n_alloc << " " << *n_pos << "\n";
-            Value* v = get_reach_def(n_alloc, n_pos);
+            Value* v = nullptr;
+            if (n_pos->getParent()->getParent() != cast->getParent()->getParent()) {
+                if (auto *arg = dyn_cast<Argument>(n_alloc)) {
+                    get_values(arg, p_set, bb, index, p_map, know);
+                }
+                 else v = get_reach_def(n_alloc, cast->getParent()->getParent()->getEntryBlock().getTerminator());
+            } else {
+                v = get_reach_def(n_alloc, n_pos);
+            }
+
             get_values(v, p_set, bb, index, p_map, know);
         } else if (auto *gep = dyn_cast<GetElementPtrInst>(v)) {
             Value* p_base = gep->getPointerOperand();
@@ -495,6 +504,9 @@ struct FuncPtrPass : public ModulePass {
             } else if (auto *cast = dyn_cast<BitCastInst>(v)) {
                 v = cast->getOperand(0);
             } else {
+                if (auto* param = dyn_cast<Argument>(v)) {
+                    break;
+                }
                 outs()  << "error: " << *v << "\n";
                 exit(-1);
 //                return nullptr;
@@ -803,7 +815,10 @@ struct FuncPtrPass : public ModulePass {
 //                outs() << *def << "\n";
 //            }
 //        }
-
+        if (reach_v) {
+            outs() << "reach v is \n";
+            outs() << *reach_v;
+        }
         return reach_v;
     }
 
@@ -828,26 +843,32 @@ struct FuncPtrPass : public ModulePass {
                     cnt++;
 //                    outs() << "S size is " << S.size() << "\n";
                 } else if (auto* func_call = dyn_cast<CallBase>(A)) {
-                    int idx = -1;
-                    for (int i = 0; i < func_call->getNumArgOperands(); i++) {
+                    if (func_call->getCalledValue()->getName() == "llvm.memcpy.p0i8.p0i8.i64") {
+                        S.push(func_call->getOperand(1));
+                        cnt++;
+                    } else {
+                        int idx = -1;
+                        for (int i = 0; i < func_call->getNumArgOperands(); i++) {
 //                    log(func_call->getOperand(i));
-                        if (func_call->getOperand(i) == alloc) {
-                            idx = i;
+                            if (func_call->getOperand(i) == alloc) {
+                                idx = i;
+                            }
                         }
-                    }
 //                log(idx);
 //                to_log = false;
-                    if (idx == -1) idx = (*p_def_pos)[func_call];
-                    if (idx != -1) {
-                        outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
-                        Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
-                                                                     func_call->getCalledFunction()->getEntryBlock().getTerminator());
-                        if (param_reach_def != nullptr) {
-                            outs() << *param_reach_def << "\n";
-                            S.push(param_reach_def);
-                            cnt++;
+                        if (idx == -1) idx = (*p_def_pos)[func_call];
+                        if (idx != -1) {
+                            outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
+                            Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
+                                                                         func_call->getCalledFunction()->getEntryBlock().getTerminator());
+                            if (param_reach_def != nullptr) {
+                                outs() << *param_reach_def << "\n";
+                                S.push(param_reach_def);
+                                cnt++;
+                            }
                         }
                     }
+
                 }
             } else if (auto* func_call = dyn_cast<CallBase>(A)) {
 
@@ -902,48 +923,54 @@ struct FuncPtrPass : public ModulePass {
                     param_S.push(st->getValueOperand());
                     cnt++;
                 } else if (auto* func_call = dyn_cast<CallBase>(A)) {
-                    int idx = -1;
-                    for (int i = 0; i < func_call->getNumArgOperands(); i++) {
+                    if (func_call->getCalledValue()->getName() == "llvm.memcpy.p0i8.p0i8.i64") {
+                        param_S.push(func_call->getOperand(1));
+                        cnt++;
+                    } else {
+                        int idx = -1;
+                        for (int i = 0; i < func_call->getNumArgOperands(); i++) {
 //                    log(func_call->getOperand(i));
-                        if (func_call->getOperand(i) == alloc) {
-                            idx = i;
+                            if (func_call->getOperand(i) == alloc) {
+                                idx = i;
+                            }
                         }
-                    }
 //                log(idx);
 //                to_log = false;
-                    if (idx == -1) idx = (*p_def_pos)[func_call];
-                    if (idx != -1) {
-                        outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
-                        std::stack<Value*> tmp, tmp2;
-                        Value* t_reach_p;
-                        t_reach_p = reach_p;
-                        while (!param_S.empty()) {
-                            tmp.push(param_S.top());
-                            param_S.pop();
-                        }
-                        while (!tmp.empty()) {
-                            tmp2.push(tmp.top());
-                            tmp.pop();
-                        }
-                        Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
-                                                                     func_call->getCalledFunction()->getEntryBlock().getTerminator());
-                        while (!tmp2.empty()) {
-                            tmp.push(tmp2.top());
-                            tmp2.pop();
-                        }
+                        if (idx == -1) idx = (*p_def_pos)[func_call];
+                        if (idx != -1) {
+                            outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
+                            std::stack<Value*> tmp, tmp2;
+                            Value* t_reach_p;
+                            t_reach_p = reach_p;
+                            while (!param_S.empty()) {
+                                tmp.push(param_S.top());
+                                param_S.pop();
+                            }
+                            while (!tmp.empty()) {
+                                tmp2.push(tmp.top());
+                                tmp.pop();
+                            }
+                            Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
+                                                                         func_call->getCalledFunction()->getEntryBlock().getTerminator());
+                            while (!tmp2.empty()) {
+                                tmp.push(tmp2.top());
+                                tmp2.pop();
+                            }
 
-                        while (!tmp.empty()) {
-                            param_S.push(tmp.top());
-                            tmp.pop();
-                        }
-                        reach_p = t_reach_p;
+                            while (!tmp.empty()) {
+                                param_S.push(tmp.top());
+                                tmp.pop();
+                            }
+                            reach_p = t_reach_p;
 
-                        if (param_reach_def != nullptr) {
-                            outs() << *param_reach_def << "\n";
-                            param_S.push(param_reach_def);
-                            cnt++;
+                            if (param_reach_def != nullptr) {
+                                outs() << *param_reach_def << "\n";
+                                param_S.push(param_reach_def);
+                                cnt++;
+                            }
                         }
                     }
+
                 }
             }
         }
@@ -982,24 +1009,29 @@ struct FuncPtrPass : public ModulePass {
                     cnt++;
                 } else if (auto *func_call = dyn_cast<CallBase>(A)) {
 //                    S.push(call);
-                    int idx = -1;
-                    for (int i = 0; i < func_call->getNumArgOperands(); i++) {
+                    if (func_call->getCalledValue()->getName() == "llvm.memcpy.p0i8.p0i8.i64") {
+                        S.push(func_call->getOperand(1));
+                        cnt++;
+                    } else {
+                        int idx = -1;
+                        for (int i = 0; i < func_call->getNumArgOperands(); i++) {
 //                    log(func_call->getOperand(i));
-                        if (func_call->getOperand(i) == alloc) {
-                            idx = i;
+                            if (func_call->getOperand(i) == alloc) {
+                                idx = i;
+                            }
                         }
-                    }
 //                log(idx);
 //                to_log = false;
-                    if (idx == -1) idx = 0;
-                    if (idx != -1) {
-                        outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
-                        Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
-                                                                     func_call->getCalledFunction()->getEntryBlock().getTerminator());
-                        if (param_reach_def != nullptr) {
-                            outs() << *param_reach_def << "\n";
-                            S.push(param_reach_def);
-                            cnt++;
+                        if (idx == -1) idx = 0;
+                        if (idx != -1) {
+                            outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
+                            Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
+                                                                         func_call->getCalledFunction()->getEntryBlock().getTerminator());
+                            if (param_reach_def != nullptr) {
+                                outs() << *param_reach_def << "\n";
+                                S.push(param_reach_def);
+                                cnt++;
+                            }
                         }
                     }
                 } else {
@@ -1058,23 +1090,39 @@ struct FuncPtrPass : public ModulePass {
             } else if (auto* cast = dyn_cast<BitCastInst>(user)) {
                 mem_use_def_dfs(cast);
             } else if (auto *call = dyn_cast<CallBase>(user)) {
-                int idx = -1;
-                for (int i = 0; i < call->getNumArgOperands(); i++) {
-//                    log(func_call->getOperand(i));
-                    if (call->getOperand(i) == inst) {
-                        idx = i;
-                    }
-                }
-                if (auto *func = dyn_cast<Function>(call->getCalledValue())) {
-                    Value *v = get_param_reach_def(call->getCalledFunction()->getArg(idx),
-                                                   call->getCalledFunction()->getEntryBlock().getTerminator());
-                    if (v != nullptr) {
-                        outs() << *call << " def " << *inst << "\n";
-                        def_bbs.insert(call->getParent());
+                if (call->getCalledValue()->getName() == "llvm.memcpy.p0i8.p0i8.i64") {
+//                    outs() << "memcpy st" << *get_mem_pos(call->getOperand(0)) << "\n";
+//                    outs() << "memcpy from" << *get_mem_pos(call->getOperand(1)) << "\n";
+//                    call->getOperand(1);
+                    if (call->getOperand(0) == inst) {
                         def_insts->insert(call);
-                        (*def_pos)[call] = idx;
+                        def_bbs.insert(call->getParent());
+                    } else {
+//                        def_insts->insert(call);
+//                        def_bbs.insert(call->getParent());
+                    }
+
+                } else {
+                    int idx = -1;
+                    for (int i = 0; i < call->getNumArgOperands(); i++) {
+//                    log(func_call->getOperand(i));
+                        if (call->getOperand(i) == inst) {
+                            idx = i;
+                        }
+                    }
+                    if (auto *func = dyn_cast<Function>(call->getCalledValue())) {
+                        Value *v = get_param_reach_def(call->getCalledFunction()->getArg(idx),
+                                                       call->getCalledFunction()->getEntryBlock().getTerminator());
+                        if (v != nullptr) {
+                            outs() << *call << " def " << *inst << "\n";
+                            def_bbs.insert(call->getParent());
+                            def_insts->insert(call);
+                            (*def_pos)[call] = idx;
+                        }
                     }
                 }
+
+
             }
 
         }
@@ -1122,8 +1170,8 @@ struct FuncPtrPass : public ModulePass {
                         funcs->clear();
                         func_maps->clear();
                         c_know->clear();
-//                        if (call->getDebugLoc().getLine() == 25) {
-//                            errs() << "line 25\n";
+//                        if (call->getDebugLoc().getLine() == 88) {
+//                            errs() << "line 88\n";
 //                        }
                         //todo: check this position is correct or not
                         n_pos = call;
