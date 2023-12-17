@@ -141,7 +141,7 @@ struct FuncPtrPass : public ModulePass {
         if (v == nullptr) return;
         if (auto *cast = dyn_cast<BitCastInst>(v)) {
             n_alloc = cast->getOperand(0);
-            outs() << *n_alloc << " " << *n_pos << "\n";
+//            outs() << *n_alloc << " " << *n_pos << "\n";
             Value* v = nullptr;
             if (n_pos->getParent()->getParent() != cast->getParent()->getParent()) {
                 if (auto *arg = dyn_cast<Argument>(n_alloc)) {
@@ -159,7 +159,7 @@ struct FuncPtrPass : public ModulePass {
         } else if (auto *alloc = dyn_cast<AllocaInst>(v)) {
             n_alloc = alloc;
             Value* v = get_reach_def(n_alloc, n_pos);
-            outs() << *n_alloc << " reach pos: " << *n_pos << " value is: " << *v << "\n";
+//            outs() << *n_alloc << " reach pos: " << *n_pos << " value is: " << *v << "\n";
             get_values(v, p_set, bb, index, p_map, know);
         } else if (auto *b_v = dyn_cast<BasicBlock>(v)) {
             for (Value* nxt: *(*bb_mem_phi_value[n_alloc])[b_v]) {
@@ -177,9 +177,9 @@ struct FuncPtrPass : public ModulePass {
             } else if (auto *para = dyn_cast<Argument>(n_alloc)) {
 
                 Value* v = get_param_reach_def(n_alloc, ld);
-                outs() << "n alloc is param, and reach v is ";
-                if (v == nullptr) outs() << "null\n";
-                else outs() << *v << "\n";
+//                outs() << "n alloc is param, and reach v is ";
+//                if (v == nullptr) outs() << "null\n";
+//                else outs() << *v << "\n";
 
                 if (v == nullptr)   get_values(n_alloc, p_set, bb, index, p_map, know);
                 else {
@@ -339,9 +339,9 @@ struct FuncPtrPass : public ModulePass {
         for (Function &F: M) {
             BasicBlock* enter = &(*F.getBasicBlockList().begin());
             std::set<BasicBlock*>* BBs = (*bbs_map)[&F];
-            outs() << F.getName() << ": " << BBs->size() << "\n";
+//            outs() << F.getName() << ": " << BBs->size() << "\n";
             for (BasicBlock* bb: *BBs) {
-                bb->printAsOperand(outs(), false); outs() << " ";
+//                bb->printAsOperand(outs(), false); outs() << " ";
                 std::set<BasicBlock*>* doms = new std::set<BasicBlock*>();
                 std::set<BasicBlock*>* know = new std::set<BasicBlock*>();
                 dfs(enter, bb, know);
@@ -352,7 +352,7 @@ struct FuncPtrPass : public ModulePass {
                 }
                 (*dm_map)[bb] = doms;
             }
-            outs() << "\n";
+//            outs() << "\n";
         }
     }
 
@@ -464,6 +464,7 @@ struct FuncPtrPass : public ModulePass {
     }
 
     void print_bb_mem_phi_value() {
+        return;
         for (auto ie = bb_mem_phi_value.begin(); ie != bb_mem_phi_value.end(); ie++) {
             outs() << "for instr: " <<  *ie->first << ":\n";
             for (auto it = ie->second->begin(); it != ie->second->end(); it++) {
@@ -555,11 +556,11 @@ struct FuncPtrPass : public ModulePass {
                 (*def_insts_map)[alloc] = def_insts;
                 (*use_insts_map)[alloc] = use_insts;
                 (*def_pos_map)[alloc] = def_pos;
-                outs() << "F has bb: ";
-                for (BasicBlock* f_bb: *F) {
-                    f_bb->printAsOperand(outs(), false); outs() << " ";
-                }
-                outs() << "\n";
+//                outs() << "F has bb: ";
+//                for (BasicBlock* f_bb: *F) {
+//                    f_bb->printAsOperand(outs(), false); outs() << " ";
+//                }
+//                outs() << "\n";
                 while (!S.empty()) S.pop();
                 rename_dfs(alloc, &function.getEntryBlock());
                 // todo: extend basic block value to common value
@@ -607,13 +608,13 @@ struct FuncPtrPass : public ModulePass {
                 }
             }
         }
-        outs() << "alias ptr:\n";
-        for (auto *k: alias_ptr) {
-            for (auto *kk: *k) {
-                outs() << *kk << ",\t";
-            }
-            outs() << "\n";
-        }
+//        outs() << "alias ptr:\n";
+//        for (auto *k: alias_ptr) {
+//            for (auto *kk: *k) {
+//                outs() << *kk << ",\t";
+//            }
+//            outs() << "\n";
+//        }
 
         //pre calc def-use
         for (Function &function: M) {
@@ -666,7 +667,7 @@ struct FuncPtrPass : public ModulePass {
                     }
                 }
             }
-            outs() << "\n";
+//            outs() << "\n";
         }
 
 
@@ -722,11 +723,11 @@ struct FuncPtrPass : public ModulePass {
                         (*w_map)[alloc] = W;
 //                        (*def_insts_map)[alloc] = def_insts;
 //                        (*use_insts_map)[alloc] = use_insts;
-                        outs() << "F has bb: ";
-                        for (BasicBlock* f_bb: *F) {
-                            f_bb->printAsOperand(outs(), false); outs() << " ";
-                        }
-                        outs() <<  S.size() << "\n";
+//                        outs() << "F has bb: ";
+//                        for (BasicBlock* f_bb: *F) {
+//                            f_bb->printAsOperand(outs(), false); outs() << " ";
+//                        }
+//                        outs() <<  S.size() << "\n";
                         while (!S.empty()) S.pop();
                         rename_dfs(alloc, &function.getEntryBlock());
                         // todo: extend basic block value to common value
@@ -797,16 +798,16 @@ struct FuncPtrPass : public ModulePass {
         for (auto *v: *alias_inst) {
             if (def_insts->find(v) != def_insts->end()) def_insts->erase(v);
         }
-        outs() << *alloc << " defs: \n";
-        for (Instruction* def_inst: *def_insts) {
-            outs() << *def_inst << "\n";
-        }
-        outs() << "==========================\n";
-        outs() << "F has bb: \n";
-        for (BasicBlock* bb: *F) {
-            bb->printAsOperand(outs(), false), outs() << " ";
-        }
-        outs() << "==========================\n";
+//        outs() << *alloc << " defs: \n";
+//        for (Instruction* def_inst: *def_insts) {
+//            outs() << *def_inst << "\n";
+//        }
+//        outs() << "==========================\n";
+//        outs() << "F has bb: \n";
+//        for (BasicBlock* bb: *F) {
+//            bb->printAsOperand(outs(), false), outs() << " ";
+//        }
+//        outs() << "==========================\n";
         while (!S.empty()) S.pop();
         get_reach_v_dfs(alloc, pos, &pos->getParent()->getParent()->getEntryBlock());
 //        if (auto *bb = dyn_cast<BasicBlock>(reach_v)) {
@@ -815,10 +816,10 @@ struct FuncPtrPass : public ModulePass {
 //                outs() << *def << "\n";
 //            }
 //        }
-        if (reach_v) {
-            outs() << "reach v is \n";
-            outs() << *reach_v;
-        }
+//        if (reach_v) {
+//            outs() << "reach v is \n";
+//            outs() << *reach_v;
+//        }
         return reach_v;
     }
 
@@ -826,8 +827,8 @@ struct FuncPtrPass : public ModulePass {
     void get_reach_v_dfs(Value* alloc, Instruction *pos, BasicBlock *X) {
         int cnt = 0;
         if (F->find(X) != F->end()) { // X has mem phi
-            X->printAsOperand(outs(), false);
-            outs() << "\n";
+//            X->printAsOperand(outs(), false);
+//            outs() << "\n";
             S.push(X); cnt++;
         }
         for (Instruction* A = X->getFirstNonPHIOrDbg(); A; A = A->getNextNonDebugInstruction()) {
@@ -858,11 +859,11 @@ struct FuncPtrPass : public ModulePass {
 //                to_log = false;
                         if (idx == -1) idx = (*p_def_pos)[func_call];
                         if (idx != -1) {
-                            outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
+//                            outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
                             Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
                                                                          func_call->getCalledFunction()->getEntryBlock().getTerminator());
                             if (param_reach_def != nullptr) {
-                                outs() << *param_reach_def << "\n";
+//                                outs() << *param_reach_def << "\n";
                                 S.push(param_reach_def);
                                 cnt++;
                             }
@@ -910,8 +911,8 @@ struct FuncPtrPass : public ModulePass {
     void get_reach_p_dfs(Value* alloc, Instruction *pos, BasicBlock *X) {
         int cnt = 0;
         if (p_f->find(X) != p_f->end()) { // X has mem phi
-            X->printAsOperand(outs(), false);
-            outs() << "\n";
+//            X->printAsOperand(outs(), false);
+//            outs() << "\n";
             param_S.push(X); cnt++;
         }
         for (Instruction* A = X->getFirstNonPHIOrDbg(); A; A = A->getNextNonDebugInstruction()) {
@@ -938,7 +939,7 @@ struct FuncPtrPass : public ModulePass {
 //                to_log = false;
                         if (idx == -1) idx = (*p_def_pos)[func_call];
                         if (idx != -1) {
-                            outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
+//                            outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
                             std::stack<Value*> tmp, tmp2;
                             Value* t_reach_p;
                             t_reach_p = reach_p;
@@ -964,7 +965,7 @@ struct FuncPtrPass : public ModulePass {
                             reach_p = t_reach_p;
 
                             if (param_reach_def != nullptr) {
-                                outs() << *param_reach_def << "\n";
+//                                outs() << *param_reach_def << "\n";
                                 param_S.push(param_reach_def);
                                 cnt++;
                             }
@@ -1024,11 +1025,11 @@ struct FuncPtrPass : public ModulePass {
 //                to_log = false;
                         if (idx == -1) idx = 0;
                         if (idx != -1) {
-                            outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
+//                            outs() << *func_call << " use ptr " << *alloc << " at index of " << idx << "\n";
                             Value *param_reach_def = get_param_reach_def(func_call->getCalledFunction()->getArg(idx),
                                                                          func_call->getCalledFunction()->getEntryBlock().getTerminator());
                             if (param_reach_def != nullptr) {
-                                outs() << *param_reach_def << "\n";
+//                                outs() << *param_reach_def << "\n";
                                 S.push(param_reach_def);
                                 cnt++;
                             }
@@ -1114,7 +1115,7 @@ struct FuncPtrPass : public ModulePass {
                         Value *v = get_param_reach_def(call->getCalledFunction()->getArg(idx),
                                                        call->getCalledFunction()->getEntryBlock().getTerminator());
                         if (v != nullptr) {
-                            outs() << *call << " def " << *inst << "\n";
+//                            outs() << *call << " def " << *inst << "\n";
                             def_bbs.insert(call->getParent());
                             def_insts->insert(call);
                             (*def_pos)[call] = idx;
@@ -1136,18 +1137,18 @@ struct FuncPtrPass : public ModulePass {
     bool runOnModule(Module &M) override {
 //        errs() << "Hello: ";
 //        errs().write_escaped(M.getName()) << '\n';
-        for (Function &F: M) {
-            outs() << F << "\n";
-        }
+//        for (Function &F: M) {
+//            outs() << F << "\n";
+//        }
         init(M);
         make_dom(M);
-        print_map(dm_map);
+//        print_map(dm_map);
         make_idm(M);
-        print_map(idm_map);
+//        print_map(idm_map);
         make_df(M);
-        print_map(df_map);
+//        print_map(df_map);
         mem_phi(M);
-        print_reach_def();
+//        print_reach_def();
         for (Function &F: M) {
 //            errs() << F.getName();
 //            errs() << " use empty: " << F.users().empty() << "\n";

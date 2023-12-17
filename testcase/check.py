@@ -42,6 +42,7 @@ def check_answer(st=0, ed=20):
     ans_map = init_map(suffix=".c", st=st, ed=ed)
     out_map = init_map(suffix=".out", st=st, ed=ed)
     log = {}
+    is_pure = {}
     for key in out_map.keys():
         ans = ans_map[key]
         out = out_map[key]
@@ -63,10 +64,23 @@ def check_answer(st=0, ed=20):
             log[key] = ("Wrong Answer", log_line)
         else:
             log[key] = ("Accept", "no error log, passed")
-    return log
+        # check pure
+        all_out = open(key + ".out")
+        pure_out = open(key + ".out.pure")
+        is_pure[key] = "Pure!"
+        while True:
+            t1 = all_out.readline()
+            t2 = pure_out.readline()
+            if not t1 or not t2:
+                if t1 or t2:
+                    is_pure[key] = "has debug log, line num not equal"
+                break
+            if t1 != t2:
+                is_pure[key] = "has debug log, has line not same"
+    return log, is_pure
 
 
 if __name__ == '__main__':
-    log = check_answer(0, 35)
+    log, is_pure = check_answer(0, 35)
     for key in log.keys():
-        print("{}: {}, {}".format(key, log[key][0], log[key][1]))
+        print("{}: {}, {}, {}".format(key, log[key][0], log[key][1], is_pure[key]))
