@@ -337,6 +337,7 @@ struct FuncPtrPass : public ModulePass {
 
     void make_dom(Module &M) {
         for (Function &F: M) {
+            if (F.isDeclaration()) continue;
             BasicBlock* enter = &(*F.getBasicBlockList().begin());
             std::set<BasicBlock*>* BBs = (*bbs_map)[&F];
 //            outs() << F.getName() << ": " << BBs->size() << "\n";
@@ -519,6 +520,7 @@ struct FuncPtrPass : public ModulePass {
     void mem_phi(Module &M) {
         // todo: calc func params:
         for (Function &function: M) {
+            if (function.isDeclaration()) continue;
             for (Value &vv: function.args()) {
                 Value *alloc = &vv;
                 bb_mem_phi_value[alloc] = new std::map<BasicBlock*, std::set<Value*>*>;
@@ -672,6 +674,7 @@ struct FuncPtrPass : public ModulePass {
 
 
         for (Function &function: M) {
+            if (function.isDeclaration()) continue;
             for (BasicBlock &B: function) {
                 for (Instruction &inst: B) {
                     bool run_tag = false;
@@ -1014,6 +1017,7 @@ struct FuncPtrPass : public ModulePass {
                         S.push(func_call->getOperand(1));
                         cnt++;
                     } else {
+                        if (func_call->getCalledValue()->getName().startswith("llvm") || func_call->getCalledValue()->getName().endswith("loc")) continue;
                         int idx = -1;
                         for (int i = 0; i < func_call->getNumArgOperands(); i++) {
 //                    log(func_call->getOperand(i));
@@ -1104,6 +1108,8 @@ struct FuncPtrPass : public ModulePass {
                     }
 
                 } else {
+
+                    if (call->getCalledValue()->getName().startswith("llvm") || call->getCalledValue()->getName().endswith("loc")) continue;
                     int idx = -1;
                     for (int i = 0; i < call->getNumArgOperands(); i++) {
 //                    log(func_call->getOperand(i));
